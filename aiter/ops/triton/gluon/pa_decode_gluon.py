@@ -701,6 +701,18 @@ def paged_attention_decode_v2_gluon_large_block_dot_kernel(
     else:
         # Early return if this partition is beyond sequence length
         if kv_sequence_start_index >= context_length:
+            store_temporary_result(
+                max_logits,
+                exp_sums,
+                attention_accumulator.to(OUTPUT_DTYPE),
+                max_logits_ptr,
+                exp_sums_ptr,
+                output_ptr,
+                max_logits_offsets,
+                output_offsets,
+                qk_row_mask,
+                output_mask,
+            )
             return
 
     query_shared = gl.allocate_shared_memory(
@@ -3634,6 +3646,18 @@ def paged_attention_decode_v2_gluon_dot_kernel(
     else:
         kv_sequence_start_idx = sequence_partition_idx * CONTEXT_PARTITION_SIZE
         if kv_sequence_start_idx >= context_length:
+            store_temporary_result(
+                max_logits,
+                exp_sums,
+                attention_accumulator.to(OUTPUT_DTYPE),
+                max_logits_ptr,
+                exp_sums_ptr,
+                output_ptr,
+                max_logits_offsets,
+                output_offsets,
+                qk_row_mask,
+                output_mask,
+            )
             return
         MAX_WINDOW_BLOCKS: gl.constexpr = KV_COMPUTE_BLOCK_COUNT
 

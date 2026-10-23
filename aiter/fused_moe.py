@@ -1856,6 +1856,8 @@ _PADDED_M_TIERS = [32768, 131072]
 
 
 def get_padded_M(M):
+    if os.environ.get("AITER_FMOE_BUCKET_PADDING", "0") == "1":
+        return 1 if M <= 1 else 1 << (M - 1).bit_length()
     if M < _PADDED_M_TIERS[0]:
         return nextPow2(M)
     for tier in reversed(_PADDED_M_TIERS):
@@ -2626,8 +2628,14 @@ def _mxfp4_scale_u8(scale):
     return scale
 
 
-def _flydsl_stage2_fp8_enabled():
-    return os.environ.get("AITER_FLYDSL_STAGE2_FP8", "0") == "1"
+def _flydsl_stage2_fp8_enabled(token_num=None):
+    mode = os.environ.get("AITER_FLYDSL_STAGE2_FP8", "0")
+    if mode != "1":
+        return False
+    if token_num is not None:
+        min_tokens = int(os.environ.get("AITER_FLYDSL_STAGE2_FP8_MIN_M", "256"))
+        return token_num >= min_tokens
+    return True
 
 
 def _opus_stage2_fp8_enabled():
@@ -2683,7 +2691,7 @@ def _flydsl_v2_stage2_wrapper(
     model_dim_runtime = out.shape[1]
     target = out
     _kstatic = os.environ.get("MXFP4_G2_KSTATIC", "1") == "1"
-    _s2_fp8_inter = epilog == "reduce" and _flydsl_stage2_fp8_enabled()
+    _s2_fp8_inter = epilog == "reduce" and _flydsl_stage2_fp8_enabled(token_num)
     if _s2_fp8_inter and _kstatic:
         _s2_fp8_inter = sorted_weights is not None and topk_weights is not None
     _defer_w = _s2_fp8_inter and _kstatic
@@ -2891,6 +2899,9 @@ def get_2stage_cfgs(
     has_activation_scales=False,
     has_num_local_tokens=False,
 ):
+    if os.environ.get("AITER_FMOE_BUCKET_PADDING", "0") == "1":
+        if isinstance(token, int) and token > 0:
+            token = 1 if token <= 1 else 1 << (token - 1).bit_length()
     gate_mode = GateMode(gate_mode)
     cktile_mxfp4_unsafe = q_dtype_w == dtypes.fp4x2 and inter_dim % 256 != 0
     flydsl_can_take_over = _can_reroute_mxfp4_to_flydsl(
@@ -5231,3 +5242,42 @@ def fused_topk(
     #     topk_weights = topk_weights / topk_weights.sum(dim=-1, keepdim=True)
 
     return topk_weights, topk_ids
+
+
+def get_fused_moe_configs(
+    M,
+    N,
+    K,
+    topk,
+    dtype,
+    expert=129,
+    activation=ActivationType.Swiglu,
+    quant_type=QuantType.per_1x32,
+    q_dtype_a=dtypes.fp4x2,
+    q_dtype_w=dtypes.fp4x2,
+    use_g1u1=True,
+    doweight_stage1=False,
+    config_file=None,
+    **kwargs,
+):
+    """Retrieve fused MoE configs with optional dynamic M power-of-two bucket alignment."""
+    if os.environ.get("AITER_FMOE_BUCKET_PADDING", "0") == "1":
+        if isinstance(M, int) and M > 0:
+            M = 1 if M <= 1 else 1 << (M - 1).bit_length()
+    return get_2stage_cfgs(
+        token=M,
+        model_dim=K,
+        inter_dim=N,
+        expert=expert,
+        topk=topk,
+        dtype=dtype,
+        q_dtype_a=q_dtype_a,
+        q_dtype_w=q_dtype_w,
+        q_type=quant_type,
+        use_g1u1=use_g1u1,
+        activation=activation,
+        doweight_stage1=doweight_stage1,
+        hidden_pad=kwargs.get("hidden_pad", 0),
+        intermediate_pad=kwargs.get("intermediate_pad", 0),
+        config_file=config_file,
+    )

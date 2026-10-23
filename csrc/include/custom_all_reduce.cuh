@@ -4066,37 +4066,55 @@ class CustomAllreduce
         for(int i = 0; i < num_input_buffers; i++)
         {
             auto ptr = graph_unreg_input_buffers_[i];
-            void* base_ptr;
-            // note: must share the base address of each allocation, or we get wrong
-            // address
-            if(hipPointerGetAttribute(&base_ptr,
+            static std::unordered_map<void*, std::pair<void*, int64_t>> ipc_desc_cache;
+            void* base_ptr = nullptr;
+            int64_t offset = 0;
+            auto it = ipc_desc_cache.find(ptr);
+            if (it != ipc_desc_cache.end()) {
+                base_ptr = it->second.first;
+                offset = it->second.second;
+            } else {
+                if(hipPointerGetAttribute(&base_ptr,
 #ifdef USE_ROCM
-                                      HIP_POINTER_ATTRIBUTE_RANGE_START_ADDR,
+                                          HIP_POINTER_ATTRIBUTE_RANGE_START_ADDR,
 #else
-                                      CU_POINTER_ATTRIBUTE_RANGE_START_ADDR,
+                                          CU_POINTER_ATTRIBUTE_RANGE_START_ADDR,
 #endif
-                                      (hipDeviceptr_t)ptr) != CUDA_SUCCESS)
-                throw std::runtime_error("failed to get pointer attr");
+                                          (hipDeviceptr_t)ptr) != CUDA_SUCCESS)
+                    throw std::runtime_error("failed to get pointer attr");
+                offset = ((char*)ptr) - ((char*)base_ptr);
+                ipc_desc_cache[ptr] = {base_ptr, offset};
+            }
             HIP_CALL(hipIpcGetMemHandle((hipIpcMemHandle_t*)&handles[i * handle_sz], base_ptr));
-            offsets[i] = ((char*)ptr) - ((char*)base_ptr);
+            offsets[i] = offset;
         }
 
         // Process output buffers
         for(int i = 0; i < num_output_buffers; i++)
         {
             auto ptr = graph_unreg_output_buffers_[i];
-            void* base_ptr;
-            if(hipPointerGetAttribute(&base_ptr,
+            static std::unordered_map<void*, std::pair<void*, int64_t>> ipc_desc_cache_out;
+            void* base_ptr = nullptr;
+            int64_t offset = 0;
+            auto it = ipc_desc_cache_out.find(ptr);
+            if (it != ipc_desc_cache_out.end()) {
+                base_ptr = it->second.first;
+                offset = it->second.second;
+            } else {
+                if(hipPointerGetAttribute(&base_ptr,
 #ifdef USE_ROCM
-                                      HIP_POINTER_ATTRIBUTE_RANGE_START_ADDR,
+                                          HIP_POINTER_ATTRIBUTE_RANGE_START_ADDR,
 #else
-                                      CU_POINTER_ATTRIBUTE_RANGE_START_ADDR,
+                                          CU_POINTER_ATTRIBUTE_RANGE_START_ADDR,
 #endif
-                                      (hipDeviceptr_t)ptr) != CUDA_SUCCESS)
-                throw std::runtime_error("failed to get pointer attr for output");
+                                          (hipDeviceptr_t)ptr) != CUDA_SUCCESS)
+                    throw std::runtime_error("failed to get pointer attr for output");
+                offset = ((char*)ptr) - ((char*)base_ptr);
+                ipc_desc_cache_out[ptr] = {base_ptr, offset};
+            }
             HIP_CALL(hipIpcGetMemHandle(
                 (hipIpcMemHandle_t*)&handles[(num_input_buffers + i) * handle_sz], base_ptr));
-            offsets[num_input_buffers + i] = ((char*)ptr) - ((char*)base_ptr);
+            offsets[num_input_buffers + i] = offset;
         }
 
         return std::make_pair(handles, offsets);
